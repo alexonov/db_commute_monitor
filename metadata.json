@@ -1,0 +1,6 @@
+{
+  "name": "DB Commute Monitor",
+  "description": "Zero-friction German train commute tracker with real-time delay and cancellation alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
