@@ -1,22 +1,53 @@
 import { NormalizedDeparture, Departure } from './types';
 
-const API_BASE = '/api/db';
+const MIRRORS = [
+  'https://v6.db.transport.rest',
+  'https://v5.db.transport.rest',
+  'https://db.transport.rest',
+  'https://v6.hvv.transport.rest',
+  'https://v5.hvv.transport.rest'
+];
+
+async function mirrorFetch(path: string, params: Record<string, string> = {}): Promise<any> {
+  let lastError: any = null;
+  
+  for (const host of MIRRORS) {
+    try {
+      const url = new URL(`${host}/${path}`);
+      Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per mirror
+      
+      console.log(`[API] Trying mirror: ${host}...`);
+      const res = await fetch(url.toString(), { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (res.ok) {
+        return await res.json();
+      }
+      lastError = new Error(`Mirror ${host} returned ${res.status}`);
+    } catch (e: any) {
+      console.warn(`[API] Mirror ${host} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
+      lastError = e;
+    }
+  }
+  throw lastError || new Error('All mirrors failed');
+}
 
 export async function searchStations(query: string) {
   if (!query || query.length < 2) return [];
   try {
-    const url = `${API_BASE}/locations?query=${encodeURIComponent(query)}&results=5&stops=true&address=false&poi=false`;
-    console.log(`[API] Searching: ${url}`);
-    const response = await fetch(url);
-    if (!response.ok) {
-       const err = await response.json().catch(() => ({}));
-       console.error('[API] Search failed:', response.status, err);
-       return [];
-    }
-    const data = await response.json();
+    const data = await mirrorFetch('locations', {
+      query,
+      results: '5',
+      stops: 'true',
+      address: 'false',
+      poi: 'false'
+    });
     return Array.isArray(data) ? data : (data.locations || []);
   } catch (err) {
-    console.error('[API] Search connection error:', err);
+    console.error('[API] Search error:', err);
     return [];
   }
 }
@@ -24,8 +55,6 @@ export async function searchStations(query: string) {
 export async function getDepartures(fromId: string, toId: string): Promise<NormalizedDeparture[]> {
   if (!fromId || !toId) return [];
 
-  // ID cleansing - keep only digits as these are expected to be EVA IDs (80XXXXX)
-  // but allow non-numeric if they are HAFAS internal IDs
   const sFrom = String(fromId).trim();
   const sTo = String(toId).trim();
 
@@ -36,21 +65,18 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
   try {
     console.log(`[API] Looking up route: ${sFrom} -> ${sTo}`);
     
-    // Attempt 1: Journeys (Most reliable for point-to-point)
-    const journeyUrl = new URL(`${window.location.origin}${API_BASE}/journeys`);
-    journeyUrl.searchParams.set('from', sFrom);
-    journeyUrl.searchParams.set('to', sTo);
-    journeyUrl.searchParams.set('results', '10');
-    journeyUrl.searchParams.set('stopovers', 'false');
-    journeyUrl.searchParams.set('remarks', 'false');
-    journeyUrl.searchParams.set('polylines', 'false');
-    
-    console.log(`[API] Fetching journeys: ${journeyUrl.pathname}${journeyUrl.search}`);
-    const jRes = await fetch(journeyUrl.toString());
-    if (jRes.ok) {
-      const jData = await jRes.json();
-      const journeys = jData.journeys || [];
+    // Attempt 1: Journeys
+    try {
+      const jData = await mirrorFetch('journeys', {
+        from: sFrom,
+        to: sTo,
+        results: '10',
+        stopovers: 'false',
+        remarks: 'false',
+        polylines: 'false'
+      });
       
+      const journeys = jData.journeys || [];
       const results = journeys.map((j: any, index: number) => {
         const leg = (j.legs || []).find((l: any) => l.departure && l.line);
         if (!leg) return null;
@@ -70,37 +96,28 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
       }).filter(Boolean);
       
       if (results.length > 0) return results as NormalizedDeparture[];
-    } else {
-      const jErrText = await jRes.text().catch(() => 'Unknown error');
-      console.warn(`[API] Journey fetch failed: ${jRes.status} ${jErrText.substring(0, 100)}`);
+    } catch (jErr) {
+      console.warn('[API] Journeys fallback:', jErr);
     }
 
     // Attempt 2: Departures Fallback
-    console.warn(`[API] Journeys yielded no upcoming results, trying primary station departures...`);
-    const depUrl = new URL(`${window.location.origin}${API_BASE}/stops/${encodeURIComponent(sFrom)}/departures`);
-    depUrl.searchParams.set('duration', '120');
-    depUrl.searchParams.set('results', '20');
-    depUrl.searchParams.set('stopovers', 'true');
-    depUrl.searchParams.set('remarks', 'false');
-
-    console.log(`[API] Fetching departures: ${depUrl.pathname}${depUrl.search}`);
-    const dRes = await fetch(depUrl.toString());
+    console.warn(`[API] Trying departures...`);
+    const dData = await mirrorFetch(`stops/${encodeURIComponent(sFrom)}/departures`, {
+      duration: '120',
+      results: '20',
+      stopovers: 'true',
+      remarks: 'false'
+    });
     
-    if (dRes.ok) {
-      const dData = await dRes.json();
-      const raw = Array.isArray(dData) ? dData : (dData.departures || []);
-      const matches = raw.filter(d => filterByDestination(d, sTo));
-      
-      if (matches.length > 0) return matches.map((d, index) => normalizeDeparture(d, index));
-    } else {
-      const dErrText = await dRes.text().catch(() => 'Unknown error');
-      console.warn(`[API] Departures fetch failed: ${dRes.status} ${dErrText.substring(0, 100)}`);
-    }
+    const raw = Array.isArray(dData) ? dData : (dData.departures || []);
+    const matches = raw.filter(d => filterByDestination(d, sTo));
+    
+    if (matches.length > 0) return matches.map((d, index) => normalizeDeparture(d, index));
 
-    throw new Error('No upcoming trains found for this route');
+    throw new Error('No upcoming trains found');
   } catch (err: any) {
     console.error('[API] getDepartures failed:', err.message || err);
-    throw new Error(err.message?.includes('overloaded') ? 'Server busy, retrying...' : (err.message || 'Connection error'));
+    throw new Error('Connection error. Please try again in a moment.');
   }
 }
 
