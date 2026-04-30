@@ -2,28 +2,27 @@ import { NormalizedDeparture, Departure } from './types';
 
 const MIRRORS = [
   'https://v6.db.transport.rest',
-  'https://v5.db.transport.rest',
   'https://db.transport.rest',
   'https://v6.hvv.transport.rest',
-  'https://v5.hvv.transport.rest'
+  'https://v6.bvg.transport.rest',
+  'https://v6.vbb.transport.rest'
 ];
 
 async function mirrorFetch(path: string, params: Record<string, string> = {}): Promise<any> {
   let lastError: any = null;
   
   for (const host of MIRRORS) {
-    // Try each mirror up to 2 times before moving on
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Try each mirror up to 3 times with increasing delays
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const url = new URL(`${host}/${path}`);
         Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
         
         console.log(`[API] Trying ${host} (Attempt ${attempt + 1})...`);
         
-        // Simple request to avoid CORS preflight if possible
         const res = await fetch(url.toString(), { 
           signal: controller.signal
         });
@@ -37,10 +36,11 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
         
         lastError = new Error(`Mirror ${host} returned ${res.status}`);
       } catch (e: any) {
-        console.warn(`[API] Mirror ${host} attempt ${attempt + 1} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
+        const isAbort = e.name === 'AbortError' || e.name === 'TimeoutError';
+        console.warn(`[API] Mirror ${host} attempt ${attempt + 1} failed:`, isAbort ? 'Timeout' : e.message);
         lastError = e;
         
-        // If it's a network error/timeout, wait a bit before retry
+        // Wait longer on each attempt
         await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
       }
     }
@@ -110,12 +110,16 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
         const leg = (j.legs || []).find((l: any) => l.departure && l.line);
         if (!leg) return null;
         
-        // Final sanity filter: exclude non-train modes
-        const product = leg.line?.product || '';
-        const mode = leg.line?.mode || '';
-        if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(product) || ['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(mode)) {
-          return null;
-        }
+        // Final sanity filter: exclude non-train modes strictly
+        const product = (leg.line?.product || '').toLowerCase();
+        const mode = (leg.line?.mode || '').toLowerCase();
+        const name = (leg.line?.name || '').toLowerCase();
+        
+        const isBad = [
+          'bus', 'subway', 'tram', 'ferry', 'taxi', 'u-bahn', 'ubahn', 'metro'
+        ].some(token => product.includes(token) || mode.includes(token) || name.includes(token));
+
+        if (isBad) return null;
         
         return {
           id: `${j.refreshToken || Math.random()}-${index}`,
@@ -158,11 +162,16 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
       // Station match
       if (!filterByDestination(d, sTo)) return false;
       
-      // Product match
-      const p = d.line?.product || '';
-      const m = d.line?.mode || '';
-      if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(p)) return false;
-      if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(m)) return false;
+      // Product/Mode match check
+      const p = (d.line?.product || '').toLowerCase();
+      const m = (d.line?.mode || '').toLowerCase();
+      const n = (d.line?.name || '').toLowerCase();
+      
+      const isTrain = ['suburban', 'regional', 'express', 's-bahn', 'sbahn', 'train'].some(t => p.includes(t) || m.includes(t) || n.includes(t));
+      const hasBad = ['bus', 'subway', 'tram', 'ferry', 'taxi', 'u-bahn', 'ubahn'].some(t => p.includes(t) || m.includes(t) || n.includes(t));
+      
+      if (hasBad && !isTrain) return false;
+      if (!isTrain) return false;
       
       return true;
     });
