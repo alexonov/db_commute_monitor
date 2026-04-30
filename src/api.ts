@@ -24,14 +24,18 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
         console.log(`[API] Trying ${host} (Attempt ${attempt + 1})...`);
         
         const res = await fetch(url.toString(), { 
-          signal: controller.signal
+          signal: controller.signal,
+          headers: { 'Accept': 'application/json' }
         });
         
         clearTimeout(timeoutId);
         
         if (res.ok) {
           const data = await res.json();
-          if (data) return data;
+          if (data) {
+            console.log(`[API] Success from ${host}`);
+            return data;
+          }
         }
         
         lastError = new Error(`Mirror ${host} returned ${res.status}`);
