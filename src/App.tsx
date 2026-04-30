@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Settings, Train, ArrowRight, RefreshCw, X, ChevronRight, ChevronDown, Loader2, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Config, Commute, Station, NormalizedDeparture } from './types';
-import { searchStations, getDepartures } from './api';
+import { searchStations, getDepartures, checkHealth } from './api';
 import { Activity, CheckCircle, AlertCircle } from 'lucide-react';
 
 const STORAGE_KEY = 'db_monitor_config';
@@ -19,8 +19,8 @@ const HealthStatus: React.FC = () => {
   const check = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/health');
-      setData(await res.json());
+      const res = await checkHealth();
+      setData(res);
     } catch (e) {
       console.error('Health check failed');
     } finally {

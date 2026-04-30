@@ -17,24 +17,38 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s per mirror
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15s
       
       console.log(`[API] Trying mirror: ${host}...`);
-      const res = await fetch(url.toString(), { signal: controller.signal });
+      const res = await fetch(url.toString(), { 
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' }
+      });
       clearTimeout(timeoutId);
       
       if (res.ok) {
-        return await res.json();
+        const data = await res.json();
+        if (data) return data;
       }
       lastError = new Error(`Mirror ${host} returned ${res.status}`);
     } catch (e: any) {
       console.warn(`[API] Mirror ${host} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
       lastError = e;
+      // Small delay before trying next mirror
+      await new Promise(r => setTimeout(r, 1500));
     }
   }
   throw lastError || new Error('All mirrors failed');
 }
 
+export async function checkHealth() {
+  try {
+    const data = await mirrorFetch('locations', { query: 'Berlin', results: '1' });
+    return { healthy: true, source: 'mirrors' };
+  } catch (e: any) {
+    return { healthy: false, error: e.message };
+  }
+}
 export async function searchStations(query: string) {
   if (!query || query.length < 2) return [];
   try {
@@ -73,13 +87,28 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
         results: '10',
         stopovers: 'false',
         remarks: 'false',
-        polylines: 'false'
+        polylines: 'false',
+        suburban: 'true',
+        regional: 'true',
+        express: 'true',
+        subway: 'false',
+        bus: 'false',
+        tram: 'false',
+        ferry: 'false',
+        taxi: 'false'
       });
       
       const journeys = jData.journeys || [];
       const results = journeys.map((j: any, index: number) => {
         const leg = (j.legs || []).find((l: any) => l.departure && l.line);
         if (!leg) return null;
+        
+        // Final sanity filter: exclude non-train modes
+        const product = leg.line?.product || '';
+        const mode = leg.line?.mode || '';
+        if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(product) || ['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(mode)) {
+          return null;
+        }
         
         return {
           id: `${j.refreshToken || Math.random()}-${index}`,
@@ -104,13 +133,32 @@ export async function getDepartures(fromId: string, toId: string): Promise<Norma
     console.warn(`[API] Trying departures...`);
     const dData = await mirrorFetch(`stops/${encodeURIComponent(sFrom)}/departures`, {
       duration: '120',
-      results: '20',
+      results: '50', // Higher result count to find matches after filtering
       stopovers: 'true',
-      remarks: 'false'
+      remarks: 'false',
+      suburban: 'true',
+      regional: 'true',
+      express: 'true',
+      subway: 'false',
+      bus: 'false',
+      tram: 'false',
+      ferry: 'false',
+      taxi: 'false'
     });
     
     const raw = Array.isArray(dData) ? dData : (dData.departures || []);
-    const matches = raw.filter(d => filterByDestination(d, sTo));
+    const matches = raw.filter(d => {
+      // Station match
+      if (!filterByDestination(d, sTo)) return false;
+      
+      // Product match
+      const p = d.line?.product || '';
+      const m = d.line?.mode || '';
+      if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(p)) return false;
+      if (['bus', 'subway', 'tram', 'ferry', 'taxi'].includes(m)) return false;
+      
+      return true;
+    });
     
     if (matches.length > 0) return matches.map((d, index) => normalizeDeparture(d, index));
 
