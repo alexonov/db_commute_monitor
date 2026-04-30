@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Settings, Train, ArrowRight, RefreshCw, X, ChevronRight, ChevronDown, Loader2, MapPin } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Plus, Settings, Train, ArrowRight, RefreshCw, X, ChevronRight, ChevronDown, Loader2, MapPin, GripVertical } from 'lucide-react';
+import { motion, AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { Config, Commute, Station, NormalizedDeparture } from './types';
 import { searchStations, getDepartures, checkHealth } from './api';
 import { Activity, CheckCircle, AlertCircle } from 'lucide-react';
@@ -145,39 +145,47 @@ const App: React.FC = () => {
             Last update: {lastGlobalUpdate.toLocaleTimeString()}
           </p>
         </div>
-        <AnimatePresence mode="popLayout">
-          {config.commutes.length === 0 ? (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center py-20 text-center space-y-4"
-              id="empty-state"
-            >
-              <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center">
-                <MapPin className="w-10 h-10 text-slate-400" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold">No commutes saved</h2>
-                <p className="text-slate-500">Add your daily route to see real-time updates.</p>
-              </div>
-              <button 
-                onClick={() => setIsAddingMode(true)}
-                className="bg-blue-600 text-white px-6 py-2.5 rounded-xl font-semibold shadow-sm hover:bg-blue-700 transition-colors"
+        <Reorder.Group 
+          axis="y" 
+          values={config.commutes} 
+          onReorder={(newOrder) => setConfig({ ...config, commutes: newOrder })}
+          className="space-y-6"
+        >
+          <AnimatePresence mode="popLayout">
+            {config.commutes.length === 0 ? (
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                key="empty"
+                className="flex flex-col items-center justify-center py-20 text-center space-y-4"
+                id="empty-state"
               >
-                Add First Commute
-              </button>
-            </motion.div>
-          ) : (
-            config.commutes.map(commute => (
-              <CommuteItem 
-                key={commute.id} 
-                commute={commute} 
-                onRemove={() => removeCommute(commute.id)} 
-                refreshKey={refreshKey}
-              />
-            ))
-          )}
-        </AnimatePresence>
+                <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center">
+                  <MapPin className="w-10 h-10 text-slate-400" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold">No commutes saved</h2>
+                  <p className="text-slate-500">Add your daily route to see real-time updates.</p>
+                </div>
+                <button 
+                  onClick={() => setIsAddingMode(true)}
+                  className="bg-blue-600 text-white px-6 py-2.5 rounded-xl font-semibold shadow-sm hover:bg-blue-700 transition-colors"
+                >
+                  Add First Commute
+                </button>
+              </motion.div>
+            ) : (
+              config.commutes.map(commute => (
+                <CommuteItem 
+                  key={commute.id}
+                  commute={commute} 
+                  onRemove={() => removeCommute(commute.id)} 
+                  refreshKey={refreshKey}
+                />
+              ))
+            )}
+          </AnimatePresence>
+        </Reorder.Group>
 
         <HealthStatus />
       </main>
@@ -216,7 +224,7 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const controls = useDragControls();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -224,7 +232,6 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
       const data = await getDepartures(commute.from.id, commute.to.id);
       setDepartures(data.slice(0, 3));
       setError(null);
-      setLastUpdated(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Connection failed');
     } finally {
@@ -239,16 +246,23 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
   const displayedDepartures = isCollapsed ? departures.slice(0, 1) : departures;
 
   return (
-    <motion.div 
-      layout
+    <Reorder.Item
+      value={commute}
+      dragListener={false}
+      dragControls={controls}
       initial={{ opacity: 0, x: -20 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 20 }}
       className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
-      id={`commute-${commute.id}`}
     >
-      <div className="bg-slate-50 border-b border-slate-100 px-4 py-3 flex items-center justify-between cursor-pointer select-none" onClick={() => setIsCollapsed(!isCollapsed)}>
-        <div className="flex items-center gap-2 font-medium text-slate-700 overflow-hidden">
+      <div className="bg-slate-50 border-b border-slate-100 px-2 py-3 flex items-center justify-between cursor-pointer select-none" onClick={() => setIsCollapsed(!isCollapsed)}>
+        <div className="flex items-center gap-1 font-medium text-slate-700 overflow-hidden min-w-0 flex-1">
+          <div 
+            className="p-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-400"
+            onPointerDown={(e) => controls.start(e)}
+          >
+            <GripVertical className="w-4 h-4" />
+          </div>
           <div className={`transition-transform duration-200 ${isCollapsed ? '' : 'rotate-90'}`}>
             <ChevronRight className="w-4 h-4 text-slate-400" />
           </div>
@@ -256,7 +270,7 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
           <ArrowRight className="w-4 h-4 flex-shrink-0 text-slate-400" />
           <span className="truncate">{commute.to.name}</span>
         </div>
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1 pl-2" onClick={(e) => e.stopPropagation()}>
           <button 
             onClick={fetchData}
             className="p-1.5 hover:bg-white rounded-lg text-slate-400 transition-colors"
@@ -328,7 +342,7 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
           </motion.div>
         )}
       </div>
-    </motion.div>
+    </Reorder.Item>
   );
 };
 
