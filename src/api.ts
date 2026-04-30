@@ -12,30 +12,37 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
   let lastError: any = null;
   
   for (const host of MIRRORS) {
-    try {
-      const url = new URL(`${host}/${path}`);
-      Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased to 15s
-      
-      console.log(`[API] Trying mirror: ${host}...`);
-      const res = await fetch(url.toString(), { 
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' }
-      });
-      clearTimeout(timeoutId);
-      
-      if (res.ok) {
-        const data = await res.json();
-        if (data) return data;
+    // Try each mirror up to 2 times before moving on
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const url = new URL(`${host}/${path}`);
+        Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+        
+        console.log(`[API] Trying ${host} (Attempt ${attempt + 1})...`);
+        
+        // Simple request to avoid CORS preflight if possible
+        const res = await fetch(url.toString(), { 
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (res.ok) {
+          const data = await res.json();
+          if (data) return data;
+        }
+        
+        lastError = new Error(`Mirror ${host} returned ${res.status}`);
+      } catch (e: any) {
+        console.warn(`[API] Mirror ${host} attempt ${attempt + 1} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
+        lastError = e;
+        
+        // If it's a network error/timeout, wait a bit before retry
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
       }
-      lastError = new Error(`Mirror ${host} returned ${res.status}`);
-    } catch (e: any) {
-      console.warn(`[API] Mirror ${host} failed:`, e.name === 'AbortError' ? 'Timeout' : e.message);
-      lastError = e;
-      // Small delay before trying next mirror
-      await new Promise(r => setTimeout(r, 1500));
     }
   }
   throw lastError || new Error('All mirrors failed');
