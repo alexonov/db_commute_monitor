@@ -8,20 +8,29 @@ const MIRRORS = [
   'https://v6.vbb.transport.rest'
 ];
 
+let preferredMirrorIndex = 0;
+
 async function mirrorFetch(path: string, params: Record<string, string> = {}): Promise<any> {
   let lastError: any = null;
+  const len = MIRRORS.length;
   
-  for (const host of MIRRORS) {
-    // Try each mirror up to 3 times with increasing delays
-    for (let attempt = 0; attempt < 3; attempt++) {
+  // Dynamic rotation: start at preferredMirrorIndex, cycle through mirrors
+  for (let i = 0; i < len; i++) {
+    const idx = (preferredMirrorIndex + i) % len;
+    const host = MIRRORS[idx];
+    
+    // Reduce attempts to 2 per mirror with fast timeouts to avoid freezing
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const url = new URL(`${host}/${path}`);
         Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
         
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s timeout
+        // 5s timeout on first attempt, 8s on second (much more responsive than 25s)
+        const timeoutMs = attempt === 0 ? 5000 : 8000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
         
-        console.log(`[API] Trying ${host} (Attempt ${attempt + 1})...`);
+        console.log(`[API] Trying ${host} (Attempt ${attempt + 1}, index ${idx})...`);
         
         const res = await fetch(url.toString(), { 
           signal: controller.signal,
@@ -34,6 +43,8 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
           const data = await res.json();
           if (data) {
             console.log(`[API] Success from ${host}`);
+            // Update preferred mirror index to avoid dead mirrors on subsequent calls
+            preferredMirrorIndex = idx;
             return data;
           }
         }
@@ -44,8 +55,10 @@ async function mirrorFetch(path: string, params: Record<string, string> = {}): P
         console.warn(`[API] Mirror ${host} attempt ${attempt + 1} failed:`, isAbort ? 'Timeout' : e.message);
         lastError = e;
         
-        // Wait longer on each attempt
-        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        // Fast retry delay
+        if (attempt === 0) {
+          await new Promise(r => setTimeout(r, 400));
+        }
       }
     }
   }

@@ -175,9 +175,10 @@ const App: React.FC = () => {
                 </button>
               </motion.div>
             ) : (
-              config.commutes.map(commute => (
+              config.commutes.map((commute, index) => (
                 <CommuteItem 
                   key={commute.id}
+                  index={index}
                   commute={commute} 
                   onRemove={() => removeCommute(commute.id)} 
                   refreshKey={refreshKey}
@@ -219,7 +220,7 @@ const AutoRefresh: React.FC<{ onRefresh: () => void }> = ({ onRefresh }) => {
   return null;
 };
 
-const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey: number }> = ({ commute, onRemove, refreshKey }) => {
+const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey: number; index: number }> = ({ commute, onRemove, refreshKey, index }) => {
   const [departures, setDepartures] = useState<NormalizedDeparture[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -240,8 +241,33 @@ const CommuteItem: React.FC<{ commute: Commute; onRemove: () => void; refreshKey
   }, [commute]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData, refreshKey]);
+    let active = true;
+    
+    // Skip updating if window tab is hidden
+    if (document.hidden) return;
+
+    // Stagger layout update requests by 400ms * index to alleviate concurrent mirror load
+    const staggerTime = index * 400;
+    const timer = setTimeout(async () => {
+      if (active) {
+        await fetchData();
+      }
+    }, staggerTime);
+
+    const handleVisibility = () => {
+      if (!document.hidden && active) {
+        fetchData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [fetchData, refreshKey, index]);
 
   const displayedDepartures = isCollapsed ? departures.slice(0, 1) : departures;
 
